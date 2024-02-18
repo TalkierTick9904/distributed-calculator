@@ -20,3 +20,12 @@ CREATE TABLE agents (id SERIAL PRIMARY KEY, last_seen TEXT, status TEXT, gorouti
 CREATE TABLE settings (name TEXT, value INT);
 INSERT INTO settings VALUES ('add', 5), ('sub', 5), ('mult', 5), ('div', 5), ('del', 60);
 ```
+
+В папке http:
+```
+go run server.go
+```
+в папке проекта:
+```
+go run agent.go
+```
