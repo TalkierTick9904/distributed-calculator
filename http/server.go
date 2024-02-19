@@ -27,6 +27,7 @@ type controller struct {
 	nextRequestID func() string
 }
 
+// структура для взаимодействия с таблицей в бд
 type Calculation struct {
 	ID         int
 	Expression string
@@ -34,15 +35,18 @@ type Calculation struct {
 	Answer     float64
 }
 
+// структура для взаимодействия с таблицей в бд
 type Agent struct {
 	ID         int
 	Last_Seen  string
 	Status     string
 	Goroutines int
+	Dead_Time  string
 }
 
 var db *sql.DB
 
+// функция для удобного применения мидлверей
 func (mws middlewares) apply(hdlr http.Handler) http.Handler {
 	if len(mws) == 0 {
 		return hdlr
@@ -50,6 +54,7 @@ func (mws middlewares) apply(hdlr http.Handler) http.Handler {
 	return mws[1:].apply(mws[0](hdlr))
 }
 
+// функция для удобного завершения работы сервера
 func (c *controller) shutdown(ctx context.Context, server *http.Server) context.Context {
 	ctx, done := context.WithCancel(ctx)
 	quit := make(chan os.Signal, 1)
@@ -70,6 +75,7 @@ func (c *controller) shutdown(ctx context.Context, server *http.Server) context.
 	return ctx
 }
 
+// функция для упрощения работы с логгированием
 func (c *controller) logging(hdlr http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		defer func(start time.Time) {
@@ -83,6 +89,7 @@ func (c *controller) logging(hdlr http.Handler) http.Handler {
 	})
 }
 
+// функция для упрощения работы с отслеживанием запросов
 func (c *controller) tracing(hdlr http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requestID := req.Header.Get("X-Request-Id")
@@ -94,12 +101,14 @@ func (c *controller) tracing(hdlr http.Handler) http.Handler {
 	})
 }
 
+// фунция, отвечающая за путь /calculator
 func (c *controller) calculator(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/calculator" {
 		http.NotFound(w, r)
 		return
 	}
 	if r.Method == "POST" {
+		// если метод - POST, то идет обработка данных с html страницы и обновление данных на ней
 		expr := r.PostFormValue("text")
 		cl := &Calculation{Expression: expr, Status: "in progress", Answer: 0}
 		err := insertClIntoDB(cl)
@@ -125,6 +134,7 @@ func (c *controller) calculator(w http.ResponseWriter, r *http.Request) {
 		tmpl.ExecuteTemplate(w, "calculations", calculations)
 		return
 	}
+	// вставка данных из дб в html документ
 	cls, err := getClsFromDB()
 	if err != nil {
 		http.Error(w, "Internal Server Error", 500)
@@ -137,12 +147,14 @@ func (c *controller) calculator(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, calculations)
 }
 
+// фунция, отвечающая за путь /settings
 func (c *controller) settings(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/settings" {
 		http.NotFound(w, r)
 		return
 	}
 	if r.Method == "POST" {
+		// если метод - POST, то идет обработка данных с html страницы и обновление данных на ней
 		err := changeSettings(r)
 		if err != nil {
 			http.Error(w, "Internal Server Error", 500)
@@ -160,6 +172,7 @@ func (c *controller) settings(w http.ResponseWriter, r *http.Request) {
 		tmpl.ExecuteTemplate(w, "agents", ags)
 		return
 	}
+	// вставка данных из дб в html документ
 	arguments := make(map[string]any)
 	err := getSettings(arguments)
 	if err != nil {
@@ -176,6 +189,7 @@ func (c *controller) settings(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, arguments)
 }
 
+// функция, которая устанавливает соединение с дб и не падает при ошибке, пробуя еще раз через 30 секунд
 func initDB() {
 	for {
 		var err error
@@ -196,6 +210,7 @@ func initDB() {
 	}
 }
 
+// фунцкия, получающая все выражения из дб
 func getClsFromDB() ([]Calculation, error) {
 	rowsRs, err := db.Query("SELECT * FROM Calculations")
 	if err != nil {
@@ -215,6 +230,7 @@ func getClsFromDB() ([]Calculation, error) {
 	return cls, nil
 }
 
+// функция, добавляющая выражение в дб
 func insertClIntoDB(c *Calculation) error {
 	query := `INSERT INTO Calculations(expression, status, answer) VALUES($1, $2, $3)`
 	_, err := db.Exec(query, c.Expression, c.Status, c.Answer)
@@ -224,6 +240,7 @@ func insertClIntoDB(c *Calculation) error {
 	return nil
 }
 
+// фунцкия, получающая всех агентов из дб
 func getAgentsFromDB() ([]Agent, error) {
 	rowsRs, err := db.Query("SELECT * FROM Agents")
 	if err != nil {
@@ -233,7 +250,7 @@ func getAgentsFromDB() ([]Agent, error) {
 	agents := make([]Agent, 0)
 	for rowsRs.Next() {
 		agent := Agent{}
-		err := rowsRs.Scan(&agent.ID, &agent.Last_Seen, &agent.Status, &agent.Goroutines)
+		err := rowsRs.Scan(&agent.ID, &agent.Last_Seen, &agent.Status, &agent.Goroutines, &agent.Dead_Time)
 		if err != nil {
 			return nil, err
 		}
@@ -243,6 +260,7 @@ func getAgentsFromDB() ([]Agent, error) {
 	return agents, nil
 }
 
+// фунцкия, получающая все значения настроек из дб
 func getSettings(arguments map[string]any) error {
 	rowsRs, err := db.Query("SELECT * FROM Settings")
 	if err != nil {
@@ -261,6 +279,7 @@ func getSettings(arguments map[string]any) error {
 	return nil
 }
 
+// фунцкия, которая получает настройки из html документа и обновляет их значения в дб
 func changeSettings(r *http.Request) error {
 	add_value := r.PostFormValue("add")
 	sub_value := r.PostFormValue("sub")
@@ -295,6 +314,7 @@ func changeSettings(r *http.Request) error {
 	return nil
 }
 
+// фунцкия, отправляющая выражение в очередь
 func publishCl(c *Calculation) error {
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	if err != nil {
@@ -337,6 +357,7 @@ func publishCl(c *Calculation) error {
 	return nil
 }
 
+// бесконечный цикл подключения к очереди
 func connectToRMQ() {
 	for {
 		conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
@@ -346,6 +367,7 @@ func connectToRMQ() {
 			continue
 		}
 		defer conn.Close()
+		// создание канала ошибок очереди
 		notify := conn.NotifyClose(make(chan *amqp.Error))
 		ch, err := conn.Channel()
 		if err != nil {
@@ -384,10 +406,12 @@ func connectToRMQ() {
 		for {
 			select {
 			case err = <-notify:
+				// если произойдет ошибка в соединении, то агент попытается переподключиться через 30 секунд
 				log.Printf("An error occured while interacting with the broker, retrying in 30 seconds: %s", err)
 				time.Sleep(30 * time.Second)
 				break receiving
 			case delivery := <-deliveryChan:
+				// обработка heartbeat'ов от агентов по id
 				id, err := strconv.Atoi(string(delivery.Body))
 				if err != nil {
 					log.Println("Invalid id format received from a heartbeat")
@@ -433,8 +457,9 @@ func connectToRMQ() {
 						}
 					} else if time.Since(last_seen) >= 1*time.Minute && agent.Status == "inactive" {
 						log.Printf("No heartbeats received from agent %d for a very long time, changing status to dead", agent.ID)
-						query := `UPDATE Agents SET status = $1 WHERE id = $2`
-						_, err = db.Exec(query, "dead", agent.ID)
+						dead_time := time.Now().Local().Format("01/02/2006 15:04:05")
+						query := `UPDATE Agents SET status = $1, dead_time = $2 WHERE id = $3`
+						_, err = db.Exec(query, "dead", dead_time, agent.ID)
 						if err != nil {
 							log.Printf("An error occured while interacting with the db, retrying in 30 seconds: %s", err)
 							time.Sleep(1 * time.Minute)
@@ -457,7 +482,8 @@ func connectToRMQ() {
 							time.Sleep(1 * time.Minute)
 							break
 						}
-						if time.Since(last_seen) >= time.Duration(value)*time.Second {
+						dead_time, err := time.ParseInLocation("01/02/2006 15:04:05", agent.Dead_Time, time.Local)
+						if time.Since(dead_time) >= time.Duration(value)*time.Second {
 							query := `DELETE FROM Agents WHERE id = $1`
 							log.Println("Deleting dead agent")
 							_, err = db.Exec(query, agent.ID)
@@ -476,6 +502,7 @@ func connectToRMQ() {
 }
 
 func main() {
+	// инициализация сервера
 	port := 8080
 	http_logger := log.New(os.Stdout, "http: ", log.LstdFlags)
 	http_logger.Println("Server is starting...")
@@ -493,6 +520,7 @@ func main() {
 	}
 	ctx := c.shutdown(context.Background(), server)
 	http_logger.Printf("Server is running at %d\n", port)
+	// подключение к сервисам
 	initDB()
 	defer db.Close()
 	go connectToRMQ()
