@@ -21,9 +21,10 @@ docker exec -ti pg-container psql -U postgres
 CREATE DATABASE "go-pg";
 \c go-pg
 CREATE TABLE calculations (id SERIAL PRIMARY KEY, expression TEXT, status TEXT, answer DOUBLE PRECISION);
-CREATE TABLE agents (id SERIAL PRIMARY KEY, last_seen TEXT, status TEXT, goroutines INT);
+CREATE TABLE agents (id SERIAL PRIMARY KEY, last_seen TEXT, status TEXT, goroutines INT, dead_time TEXT);
 CREATE TABLE settings (name TEXT, value INT);
 INSERT INTO settings VALUES ('add', 5), ('sub', 5), ('mult', 5), ('div', 5), ('del', 60);
+\q
 ```
 Далее необходимо запустить основной сервер, это нужно сделать, находясь в папке http, так как в файле указан определенный путь к html-файлам.
 ```
