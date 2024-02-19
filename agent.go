@@ -17,6 +17,7 @@ import (
 	"github.com/streadway/amqp"
 )
 
+// структура для взаимодействия с таблицей в бд
 type Calculation struct {
 	ID         int
 	Expression string
@@ -24,15 +25,18 @@ type Calculation struct {
 	Answer     float64
 }
 
+// структура для взаимодействия с таблицей в бд
 type Agent struct {
 	ID         int
 	Last_Seen  string
 	Status     string
 	Goroutines int
+	Dead_Time  string
 }
 
 var db *sql.DB
 
+// функция, проверяющая правильность расстановки скобок в выражении
 func parenthesesCheck(expression string) bool {
 	var count int
 	for _, char := range expression {
@@ -51,7 +55,9 @@ func parenthesesCheck(expression string) bool {
 	return true
 }
 
+// функция, избавляющая выражение от ненужных скобок (по типу (число) или ((выражение)))
 func parenthesesClear(expression string) string {
+	// regex паттерны, которые помогают найти все вхождения подстрок, подходящих под описание в исходную строку
 	patternOneNum := `\(\-??\d+(\.\d+)?\)`
 	patternDups := `\({2,}.*?\){2,}`
 	clearMap := make(map[int]string)
@@ -86,12 +92,15 @@ func parenthesesClear(expression string) string {
 	return expression
 }
 
+// функция, которая выделяет все возможные для просчитывания простые выражения
 func extractSimpleExpressions(expression string) map[int]string {
+	// regex паттерны, которые помогают найти все вхождения подстрок, подходящих под описание в исходную строку
 	patternAddSub := `\d+(\.\d+)?[+\-]\-??\d+(\.\d+)?`
 	patternMultDiv := `\d+(\.\d+)?[*/]\-??\d+(\.\d+)?`
 	simpleExprMap := make(map[int]string)
 	re := regexp.MustCompile(patternAddSub)
 	matches := re.FindAllStringSubmatchIndex(expression, -1)
+	// обработка простых выражение с + и -
 	for _, match := range matches {
 		startInd, endInd := match[0], match[1]
 		if startInd == 0 && endInd == len(expression) {
@@ -142,6 +151,7 @@ func extractSimpleExpressions(expression string) map[int]string {
 	}
 	re = regexp.MustCompile(patternMultDiv)
 	matches = re.FindAllStringSubmatchIndex(expression, -1)
+	// обработка простых выражений с * и /
 	for _, match := range matches {
 		startInd, endInd := match[0], match[1]
 		if startInd == 0 {
@@ -172,6 +182,7 @@ func extractSimpleExpressions(expression string) map[int]string {
 
 func evaluateSimpleExpression(expression string, operations map[string]int, answMap map[string]float64, errChan chan error, mu *sync.Mutex, wg *sync.WaitGroup) {
 	defer wg.Done()
+	// деление выражения на два числа и оператор
 	re := regexp.MustCompile(`(\-??\d+(\.\d+)?)([+\-*/])(\-??\d+(\.\d+)?)`)
 	res := re.FindStringSubmatch(expression)
 	parts := []string{res[1], res[3], res[4]}
@@ -214,6 +225,7 @@ func evaluateSimpleExpression(expression string, operations map[string]int, answ
 }
 
 func evaluateComplexExpression(expression string, numGoroutines int, operations map[string]int) (float64, error) {
+	// форматирование и обработка сложного выражения
 	expression = strings.ReplaceAll(expression, " ", "")
 	isValid := regexp.MustCompile(`^\(*\-??\d+(\.\d+)?([+\-/*]\(*\-??\d+(\.\d+)?\)*)+\)*$`).MatchString(expression) && parenthesesCheck(expression)
 	if !isValid {
@@ -227,6 +239,7 @@ func evaluateComplexExpression(expression string, numGoroutines int, operations 
 		errChan := make(chan error, numGoroutines)
 		var count int
 		answMap := make(map[string]float64)
+		// параллельное вычисление простых выражений и занесение ответов в мапу
 		for _, v := range simpleExprMap {
 			if count < numGoroutines {
 				count++
@@ -248,6 +261,7 @@ func evaluateComplexExpression(expression string, numGoroutines int, operations 
 				go evaluateSimpleExpression(v, operations, answMap, errChan, &mu, &wg)
 			}
 		}
+		// обработка ошибок из канала
 		wg.Wait()
 		for i := 0; i < count; i++ {
 			select {
@@ -259,9 +273,11 @@ func evaluateComplexExpression(expression string, numGoroutines int, operations 
 			}
 		}
 		close(errChan)
+		// замена решенных простых выражений на ответы
 		for k, v := range simpleExprMap {
 			result := answMap[v]
 			old := len(expression)
+			// форматирование ответа до максимума в два знака после запятой
 			expression = expression[:k] + strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", result), "0"), ".") + expression[k+len(v):]
 			expression = parenthesesClear(expression)
 			if old > len(expression) {
@@ -282,11 +298,13 @@ func evaluateComplexExpression(expression string, numGoroutines int, operations 
 				}
 			}
 		}
+		// повторение цикла до того, как останется только одно число
 		simpleExprMap = extractSimpleExpressions(expression)
 	}
 	return strconv.ParseFloat(expression, 64)
 }
 
+// функция, которая устанавливает соединение с дб и не падает при ошибке, пробуя еще раз через 30 секунд
 func initDB() {
 	for {
 		var err error
@@ -307,6 +325,7 @@ func initDB() {
 	}
 }
 
+// фунцкия, получающая всех агентов из дб
 func getAgentsFromDB() ([]Agent, error) {
 	rowsRs, err := db.Query("SELECT * FROM Agents")
 	if err != nil {
@@ -316,7 +335,7 @@ func getAgentsFromDB() ([]Agent, error) {
 	agents := make([]Agent, 0)
 	for rowsRs.Next() {
 		agent := Agent{}
-		err := rowsRs.Scan(&agent.ID, &agent.Last_Seen, &agent.Status, &agent.Goroutines)
+		err := rowsRs.Scan(&agent.ID, &agent.Last_Seen, &agent.Status, &agent.Goroutines, &agent.Dead_Time)
 		if err != nil {
 			return nil, err
 		}
@@ -326,15 +345,17 @@ func getAgentsFromDB() ([]Agent, error) {
 	return agents, nil
 }
 
+// функция, добавляющая агента в дб
 func insertAgentIntoDB(agent *Agent) error {
-	query := `INSERT INTO Agents(last_seen, status, goroutines) VALUES($1, $2, $3)`
-	_, err := db.Exec(query, agent.Last_Seen, agent.Status, agent.Goroutines)
+	query := `INSERT INTO Agents(last_seen, status, goroutines, dead_time) VALUES($1, $2, $3, $4)`
+	_, err := db.Exec(query, agent.Last_Seen, agent.Status, agent.Goroutines, agent.Dead_Time)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
+// функция, получающая время выполнения операций из дб
 func getSettings() (map[string]int, error) {
 	rowsRs, err := db.Query("SELECT * FROM Settings")
 	if err != nil {
@@ -354,6 +375,7 @@ func getSettings() (map[string]int, error) {
 	return values, nil
 }
 
+// бесконечный цикл подключения к очереди
 func connectToRMQ(id int, numGoroutines int) {
 	for {
 		conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
@@ -363,6 +385,7 @@ func connectToRMQ(id int, numGoroutines int) {
 			continue
 		}
 		defer conn.Close()
+		// создание канала ошибок очереди
 		notify := conn.NotifyClose(make(chan *amqp.Error))
 		ch, err := conn.Channel()
 		if err != nil {
@@ -428,10 +451,12 @@ func connectToRMQ(id int, numGoroutines int) {
 		for {
 			select {
 			case err = <-notify:
+				// если произойдет ошибка в соединении, то агент попытается переподключиться через 30 секунд
 				log.Printf("An error occured while interacting with the broker, retrying in 30 seconds: %s", err)
 				time.Sleep(30 * time.Second)
 				break receiving
 			case delivery := <-deliveryChan:
+				// обработка выражения из канала
 				var cl Calculation
 				err := json.Unmarshal(delivery.Body, &cl)
 				if err != nil {
@@ -469,6 +494,7 @@ func connectToRMQ(id int, numGoroutines int) {
 						continue
 					}
 				}
+				// удаление объекта из очереди только после занесения данных в дб
 				delivery.Ack(false)
 			default:
 				time.Sleep(1 * time.Second)
@@ -479,6 +505,7 @@ func connectToRMQ(id int, numGoroutines int) {
 
 func main() {
 	log.Println("Agent is starting...")
+	// определение количества работающих горутин
 	numGoroutines := 5
 	if len(os.Args) > 1 {
 		val, err := strconv.Atoi(os.Args[1])
@@ -489,9 +516,11 @@ func main() {
 		}
 	}
 	log.Printf("Agent started with %d working goroutines", numGoroutines)
+	// подключение к сервисам
 	initDB()
 	defer db.Close()
-	agent := &Agent{Last_Seen: time.Now().Local().Format("01/02/2006 15:04:05"), Status: "active", Goroutines: numGoroutines}
+	// внесение нового агента в дб
+	agent := &Agent{Last_Seen: time.Now().Local().Format("01/02/2006 15:04:05"), Status: "active", Goroutines: numGoroutines, Dead_Time: ""}
 	for {
 		err := insertAgentIntoDB(agent)
 		if err != nil {
@@ -510,5 +539,6 @@ func main() {
 	}
 	var forever chan interface{}
 	go connectToRMQ(agent.ID, numGoroutines)
+	// бесконечный процесс
 	<-forever
 }
